@@ -16,6 +16,7 @@
 #include <linux/uaccess.h>
 #include <linux/device.h>
 #include <linux/slab.h>
+#include <linux/mutex.h>
 
 /* External function declaration for LHBM control */
 extern int mi_disp_set_fod_queue_work(u32 fod_btn, bool from_touch);
@@ -26,12 +27,20 @@ extern int mi_disp_set_fod_queue_work(u32 fod_btn, bool from_touch);
 
 static struct class *nyako_class;
 static struct device *lhbm_device;
+static bool lhbm_enabled = false;
+static DEFINE_MUTEX(lhbm_mutex);
 
 static ssize_t hbm_show(struct device *dev,
                        struct device_attribute *attr,
                        char *buf)
 {
-    return snprintf(buf, PAGE_SIZE, "0\n");
+    ssize_t ret;
+    
+    mutex_lock(&lhbm_mutex);
+    ret = snprintf(buf, PAGE_SIZE, "%d\n", lhbm_enabled ? 1 : 0);
+    mutex_unlock(&lhbm_mutex);
+    
+    return ret;
 }
 
 static ssize_t hbm_store(struct device *dev,
@@ -42,19 +51,46 @@ static ssize_t hbm_store(struct device *dev,
     int ret;
     
     ret = kstrtouint(buf, 10, &input);
-    if (ret < 0)
+    if (ret < 0) {
+        pr_err("nyako_lhbm: Invalid input format\n");
         return ret;
+    }
+    
+    mutex_lock(&lhbm_mutex);
     
     if (input == 1) {
-        pr_info("nyako_lhbm: Enabling LHBM\n");
-        mi_disp_set_fod_queue_work(1, false);
+        if (!lhbm_enabled) {
+            pr_info("nyako_lhbm: Enabling LHBM\n");
+            ret = mi_disp_set_fod_queue_work(1, false);
+            if (ret == 0) {
+                lhbm_enabled = true;
+                pr_info("nyako_lhbm: LHBM enabled successfully\n");
+            } else {
+                pr_err("nyako_lhbm: Failed to enable LHBM, error: %d\n", ret);
+            }
+        } else {
+            pr_info("nyako_lhbm: LHBM is already enabled\n");
+        }
     } else if (input == 0) {
-        pr_info("nyako_lhbm: Disabling LHBM\n");
-        mi_disp_set_fod_queue_work(0, false);
+        if (lhbm_enabled) {
+            pr_info("nyako_lhbm: Disabling LHBM\n");
+            ret = mi_disp_set_fod_queue_work(0, false);
+            if (ret == 0) {
+                lhbm_enabled = false;
+                pr_info("nyako_lhbm: LHBM disabled successfully\n");
+            } else {
+                pr_err("nyako_lhbm: Failed to disable LHBM, error: %d\n", ret);
+            }
+        } else {
+            pr_info("nyako_lhbm: LHBM is already disabled\n");
+        }
     } else {
         pr_warn("nyako_lhbm: Invalid input %u, only 0 or 1 allowed\n", input);
+        mutex_unlock(&lhbm_mutex);
         return -EINVAL;
     }
+    
+    mutex_unlock(&lhbm_mutex);
     
     return count;
 }
@@ -67,13 +103,14 @@ static int __init nyako_lhbm_init(void)
     
     pr_info("nyako_lhbm: Initializing driver\n");
     
+
     nyako_class = class_create(THIS_MODULE, NYAKO_CLASS_NAME);
     if (IS_ERR(nyako_class)) {
         ret = PTR_ERR(nyako_class);
         pr_err("nyako_lhbm: Failed to create class: %d\n", ret);
         return ret;
     }
-    
+
     lhbm_device = device_create(nyako_class, NULL, 0, NULL, LHBM_DEVICE_NAME);
     if (IS_ERR(lhbm_device)) {
         ret = PTR_ERR(lhbm_device);
@@ -118,3 +155,4 @@ module_exit(nyako_lhbm_exit);
 MODULE_DESCRIPTION("Nyako LHBM Control Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Nyako");
+
