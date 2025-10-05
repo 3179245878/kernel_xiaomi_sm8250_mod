@@ -18,9 +18,6 @@
 #include <linux/slab.h>
 #include <linux/mutex.h>
 
-/* External function declaration for LHBM control */
-extern int mi_disp_set_fod_queue_work(u32 fod_btn, bool from_touch);
-
 #define NYAKO_CLASS_NAME "nyako"
 #define LHBM_DEVICE_NAME "lhbm"
 #define HBM_ATTR_NAME "hbm"
@@ -29,6 +26,23 @@ static struct class *nyako_class;
 static struct device *lhbm_device;
 static bool lhbm_enabled = false;
 static DEFINE_MUTEX(lhbm_mutex);
+
+static int call_mi_disp_function(u32 fod_btn, bool from_touch)
+{
+    int (*func)(u32, bool) = NULL;
+    int ret = -ENODEV;
+
+    func = (void *)__symbol_get("mi_disp_set_fod_queue_work");
+    if (func) {
+        pr_info("nyako_lhbm: Successfully got mi_disp_set_fod_queue_work symbol\n");
+        ret = func(fod_btn, from_touch);
+        __symbol_put("mi_disp_set_fod_queue_work");
+    } else {
+        pr_err("nyako_lhbm: Failed to get mi_disp_set_fod_queue_work symbol\n");
+    }
+    
+    return ret;
+}
 
 static ssize_t hbm_show(struct device *dev,
                        struct device_attribute *attr,
@@ -40,6 +54,8 @@ static ssize_t hbm_show(struct device *dev,
     ret = snprintf(buf, PAGE_SIZE, "%d\n", lhbm_enabled ? 1 : 0);
     mutex_unlock(&lhbm_mutex);
     
+    pr_info("nyako_lhbm: hbm_show called, returning: %d\n", lhbm_enabled ? 1 : 0);
+    
     return ret;
 }
 
@@ -49,6 +65,8 @@ static ssize_t hbm_store(struct device *dev,
 {
     unsigned int input;
     int ret;
+    
+    pr_info("nyako_lhbm: hbm_store called with data: %.*s\n", (int)count, buf);
     
     ret = kstrtouint(buf, 10, &input);
     if (ret < 0) {
@@ -61,7 +79,9 @@ static ssize_t hbm_store(struct device *dev,
     if (input == 1) {
         if (!lhbm_enabled) {
             pr_info("nyako_lhbm: Enabling LHBM\n");
-            ret = mi_disp_set_fod_queue_work(1, false);
+            ret = call_mi_disp_function(1, false);
+            pr_info("nyako_lhbm: call_mi_disp_function returned: %d\n", ret);
+            
             if (ret == 0) {
                 lhbm_enabled = true;
                 pr_info("nyako_lhbm: LHBM enabled successfully\n");
@@ -74,7 +94,10 @@ static ssize_t hbm_store(struct device *dev,
     } else if (input == 0) {
         if (lhbm_enabled) {
             pr_info("nyako_lhbm: Disabling LHBM\n");
-            ret = mi_disp_set_fod_queue_work(0, false);
+
+            ret = call_mi_disp_function(0, false);
+            pr_info("nyako_lhbm: call_mi_disp_function returned: %d\n", ret);
+            
             if (ret == 0) {
                 lhbm_enabled = false;
                 pr_info("nyako_lhbm: LHBM disabled successfully\n");
@@ -102,7 +125,14 @@ static int __init nyako_lhbm_init(void)
     int ret;
     
     pr_info("nyako_lhbm: Initializing driver\n");
-    
+
+    pr_info("nyako_lhbm: Testing symbol acquisition...\n");
+    if (__symbol_get("mi_disp_set_fod_queue_work")) {
+        pr_info("nyako_lhbm: mi_disp_set_fod_queue_work symbol is available\n");
+        __symbol_put("mi_disp_set_fod_queue_work");
+    } else {
+        pr_err("nyako_lhbm: mi_disp_set_fod_queue_work symbol is NOT available\n");
+    }
 
     nyako_class = class_create(THIS_MODULE, NYAKO_CLASS_NAME);
     if (IS_ERR(nyako_class)) {
